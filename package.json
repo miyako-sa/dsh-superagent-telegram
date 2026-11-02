@@ -1,0 +1,66 @@
+{
+  "name": "dsh-superagent-telegram",
+  "version": "0.1.0",
+  "description": "Telegram Source plugin for dsh-superagent: receives Telegram messages as Triggers, under Policy, Tickets and worker replies.",
+  "license": "MIT",
+  "author": "Miyako SA <https://github.com/miyako-sa>",
+  "repository": "github:miyako-sa/dsh-superagent-telegram",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-superagent",
+    "deepseek-harness",
+    "telegram",
+    "source"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "manifestVersion": 1
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "dsh-superagent": ">=0.2.1-rc.3"
+  },
+  "peerDependenciesMeta": {
+    "dsh-superagent": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5-alpha.1",
+    "@types/node": "22.20.0",
+    "tsdown": "0.22.14",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  }
+}

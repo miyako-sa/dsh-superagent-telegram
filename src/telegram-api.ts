@@ -1,0 +1,97 @@
+/** Minimal Telegram Bot API client over global `fetch`, with token resolution and retry classification. */
+import type { TelegramMessage, TelegramUpdate, TelegramUser } from './telegram-trigger.ts'
+
+/** The environment variable the Telegram bot token is read from unless configuration names another. */
+export const DEFAULT_TOKEN_ENV = 'DSH_SUPERAGENT_TELEGRAM_TOKEN'
+/** A Bot API failure: `code` is the API/HTTP code (0 for a network failure), and `retryAfter` is 429's wait in seconds. */
+export class TelegramError extends Error {
+  constructor(readonly code: number, readonly description: string, readonly retryAfter?: number, options?: ErrorOptions) {
+    super(description, options)
+    this.name = 'TelegramError'
+  }
+}
+/** Resolves the bot token from the process environment; the token is never stored, logged, or put in an error. */
+export function telegramToken(tokenEnv: string = DEFAULT_TOKEN_ENV): string {
+  const name = tokenEnv.trim() || DEFAULT_TOKEN_ENV
+  const token = process.env[name]?.trim()
+  if (!token) throw new Error(`The Telegram token environment variable ${name} is not set`)
+  return token
+}
+/** True for failures a later poll can succeed after: rate limits, server errors, and network errors. */
+export const retryableTelegram = (error: unknown): boolean => error instanceof TelegramError
+  ? error.code === 0 || error.code === 429 || error.code >= 500
+  : error instanceof TypeError
+/** True for failures retrying cannot fix, such as a rejected token or an unknown chat. */
+export const permanentTelegram = (error: unknown): boolean => !retryableTelegram(error)
+
+export interface TelegramUpdatesInput { offset?: number; timeout?: number; allowed_updates?: string[] }
+export interface SendMessageInput {
+  chat_id: string | number
+  text: string
+  parse_mode?: 'HTML'
+  link_preview_options?: { is_disabled?: boolean }
+  reply_parameters?: { message_id: number; allow_sending_without_reply?: boolean }
+  message_thread_id?: number
+  disable_notification?: boolean
+}
+export interface TelegramChatMember { status: string; user: TelegramUser; is_anonymous?: boolean }
+export interface TelegramWebhookInfo {
+  url: string
+  has_custom_certificate?: boolean
+  pending_update_count?: number
+  last_error_date?: number
+  last_error_message?: string
+  max_connections?: number
+  allowed_updates?: string[]
+}
+interface ApiResponse<T> {
+  ok: boolean
+  result?: T
+  error_code?: number
+  description?: string
+  parameters?: { retry_after?: number; migrate_to_chat_id?: number }
+}
+/** A Bot API client bound to one token; every request is a POST to `https://api.telegram.org/bot<token>/<method>`. */
+export class TelegramApi {
+  constructor(private readonly token: string) {}
+  private url(method: string): string { return `https://api.telegram.org/bot${this.token}/${method}` }
+  private async call<T>(method: string, payload: object, signal?: AbortSignal): Promise<T> {
+    let response: Response
+    try {
+      response = await fetch(this.url(method), { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload), ...(signal ? { signal } : {}) })
+    } catch (error) {
+      if (signal?.aborted) throw error
+      throw new TelegramError(0, `Telegram ${method} network error: ${error instanceof Error ? error.message : String(error)}`,
+        undefined, { cause: error })
+    }
+    let body: ApiResponse<T>
+    try { body = await response.json() as ApiResponse<T> }
+    catch { throw new TelegramError(response.status, `Telegram ${method} returned HTTP ${response.status} without JSON`) }
+    if (!body.ok) {
+      const parameters = body.parameters
+      throw new TelegramError(body.error_code ?? response.status,
+        body.description ?? `Telegram ${method} failed with HTTP ${response.status}`, parameters?.retry_after)
+    }
+    return body.result as T
+  }
+  getMe(signal?: AbortSignal): Promise<TelegramUser> {
+    return this.call<TelegramUser>('getMe', {}, signal)
+  }
+  getUpdates(input: TelegramUpdatesInput, signal?: AbortSignal): Promise<TelegramUpdate[]> {
+    return this.call<TelegramUpdate[]>('getUpdates', {
+      ...(input.offset !== undefined ? { offset: input.offset } : {}),
+      ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
+      ...(input.allowed_updates ? { allowed_updates: input.allowed_updates } : {}),
+    }, signal)
+  }
+  sendMessage(input: SendMessageInput, signal?: AbortSignal): Promise<TelegramMessage> {
+    return this.call<TelegramMessage>('sendMessage', input, signal)
+  }
+  getChatAdministrators(chatId: string | number, signal?: AbortSignal): Promise<TelegramChatMember[]> {
+    return this.call<TelegramChatMember[]>('getChatAdministrators', { chat_id: chatId }, signal)
+  }
+  getWebhookInfo(signal?: AbortSignal): Promise<TelegramWebhookInfo> {
+    return this.call<TelegramWebhookInfo>('getWebhookInfo', {}, signal)
+  }
+}

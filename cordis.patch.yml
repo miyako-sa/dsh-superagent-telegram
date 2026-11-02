@@ -1,0 +1,6 @@
+# dsh-superagent-telegram bundle layer: inserts the Telegram Source plugin. The bot token is never stored here; the
+# plugin reads it from the environment variable its settings name (default DSH_SUPERAGENT_TELEGRAM_TOKEN). Turning the
+# Source on and setting the token happen in dsh-superagent's own Source settings.
+- insert:
+    - id: dsh-superagent-telegram
+      name: dsh-superagent-telegram

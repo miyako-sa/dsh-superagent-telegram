@@ -1,0 +1,58 @@
+name: Upstream watch
+
+# Programmatic only: compares the upstream prototype's main with the commit last seen here and opens (or updates) an Issue when
+# it moved, so a person can look. No LLM call, no code change, no auto-merge.
+
+on:
+  schedule:
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: check
+        run: |
+          set -euo pipefail
+          upstream=https://github.com/deepseek-ai/dsh-superagent-prototype.git
+          head=$(git ls-remote "$upstream" refs/heads/main | awk '{print $1}')
+          # The commit last observed upstream is recorded as a trailer on the newest commit, if any.
+          last=$(git log -1 --format=%B | sed -n 's/^Upstream-commit: //p' | head -1)
+          echo "upstream-head=$head" >> "$GITHUB_OUTPUT"
+          echo "known=${last:-none}" >> "$GITHUB_OUTPUT"
+          if [ -z "$last" ] || [ "$head" = "$last" ]; then
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tmp=$(mktemp -d)
+          git clone -q --bare --filter=blob:none --no-tags "$upstream" "$tmp/up"
+          {
+            echo "Upstream \`main\` moved: \`${last:0:12}\` -> \`${head:0:12}\`."
+            echo
+            echo "This is by an automated agent, not a human."
+            echo
+            echo '```'
+            git -C "$tmp/up" log --no-merges --format='%h %s' "$last..$head" || echo "($last is not in upstream history; compare manually)"
+            echo '```'
+            echo
+            echo 'Files:'
+            echo
+            git -C "$tmp/up" diff --name-only "$last..$head" | sed 's/^/- `/' | sed 's/$/`/' || true
+            echo
+            echo 'The plugin depends on `src/sources/*` and `lib/kind-*.d.ts`; changes to `SourceKind`, `SourceContext`, `key()` or `threadKey()` need a plugin update first.'
+          } > body.md
+          echo "moved=true" >> "$GITHUB_OUTPUT"
+      - if: steps.check.outputs.moved == 'true'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: Upstream dsh-superagent moved to ${{ steps.check.outputs.upstream-head }}
+          content-filepath: body.md
+          labels: upstream
