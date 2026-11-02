@@ -45,13 +45,7 @@
   },
   "packageManager": "pnpm@11.7.0",
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "dsh-superagent": ">=0.2.1-rc.3"
-  },
-  "peerDependenciesMeta": {
-    "dsh-superagent": {
-      "optional": true
-    }
+    "@deepseek-ai/cordis": "^4.0.1"
   },
   "dependencies": {
     "zod": "4.4.3"
