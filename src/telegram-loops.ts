@@ -5,6 +5,9 @@ import { threadKey } from './ids.ts'
 import { KV } from './kv.ts'
 import { TelegramApi, TelegramError, retryableTelegram, telegramToken } from './telegram-api.ts'
 import { rememberTokenEnv, telegramLink } from './telegram-channel.ts'
+import { downloadMedia, mediaDirectory } from './telegram-download.ts'
+import { mediaOf } from './telegram-media.ts'
+import { rememberContextConfig } from './telegram-context.ts'
 import { SOURCE, telegramTrigger, UpdateSchema, type TelegramChat, type TelegramMessage, type TelegramUpdate, type TelegramUser }
   from './telegram-trigger.ts'
 import type { TelegramConfig } from './telegram.ts'
@@ -76,10 +79,12 @@ export async function pollTelegram(ctx: SourceContext, api: TelegramApi, config:
     const message = messageOf(update, config)
     if (message) {
       recordChat(ctx, message.chat)
-      const trigger = telegramTrigger(message, me, config, id => ctx.triggers.get(id)?.threads[0]?.id)
+      const trigger = telegramTrigger(message, me, config, id => ctx.triggers.get(id)?.threads[0]?.id, update.update_id)
       if (!trigger) continue
+      rememberContextConfig(config)
       await ctx.receive(trigger)
       describe(ctx, trigger)
+      await downloadMessageMedia(ctx, api, config, message, trigger, ctx.deployment.stateDir, signal)
       continue
     }
     if (update.my_chat_member) recordChat(ctx, update.my_chat_member.chat)
@@ -87,6 +92,34 @@ export async function pollTelegram(ctx: SourceContext, api: TelegramApi, config:
   ctx.state.set(KV.telegram.offset, next)
   return updates.length
 }
+/**
+ * Downloads the files a message carried beside its text into the deployment's media directory, so a worker can open them.
+ * The Trigger text already names each file id; the downloaded paths become a `telegram-files` fact on the Trigger's Thread.
+ * Downloads are bounded by `maxDownloadFiles` and `maxDownloadBytes`, and a file that cannot be fetched only stays a
+ * placeholder in the message, so this never drops the message.
+ */
+async function downloadMessageMedia(ctx: SourceContext, api: TelegramApi, config: TelegramConfig, message: TelegramMessage,
+  trigger: Trigger, stateDir: string, signal: AbortSignal): Promise<void> {
+  const media = mediaOf(message).slice(0, config.maxDownloadFiles)
+  if (!media.length || config.maxDownloadBytes <= 0) return
+  const directory = mediaDirectory(stateDir, telegramToken(config.tokenEnv))
+  const paths: string[] = []
+  for (const item of media) {
+    try {
+      paths.push((await downloadMedia(api, item, directory, config.maxDownloadBytes, signal)).path)
+    } catch (error) {
+      if (signal.aborted) throw error
+      // A file above the limit, or one Telegram no longer serves, stays a placeholder in the message.
+    }
+  }
+  if (!paths.length) return
+  trigger.meta.files = paths
+  for (const ref of trigger.threads) {
+    ctx.threads.describe(threadKey(ref), { facts: { telegramFiles: { value: { zh: '已下载文件', en: 'Downloaded files' },
+      detail: paths.join('\n') } } })
+  }
+}
+
 /** A health detail for a failed poll that does not echo the token. */
 function failure(error: unknown): string {
   if (error instanceof TelegramError) {

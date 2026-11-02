@@ -52,6 +52,7 @@ export interface Trigger {
   readonly at: string
   readonly threads: readonly { source: string; id: string }[]
   readonly channel: { source: string; thread: string; address: Record<string, string> }
+  readonly text: string
   readonly meta: Record<string, unknown>
   readonly [key: string]: unknown
 }
@@ -59,6 +60,8 @@ export interface Trigger {
 /** What a Source kind needs from the host to poll, ingest Triggers, describe Threads and report health. */
 export interface SourceContext {
   readonly commands: unknown
+  /** Deployment facts; only the state directory is read. */
+  readonly deployment: { readonly stateDir: string }
   readonly ready: Promise<void>
   configured(): boolean
   config<C extends Record<string, unknown>>(kind: string): C | undefined
@@ -85,6 +88,31 @@ export interface SourceContext {
   report(entry: string, health: Health): void
 }
 
+/** Normalized message returned by thread context readers (`dsh-superagent` `ContextMessage`). */
+export interface ContextMessage {
+  id: string; from: string; at: string; text: string
+  bot?: true; deleted?: true; reply_to?: string; url?: string
+}
+export type ContextPartName = 'thread' | 'root' | 'parent'
+export interface ContextPart { messages: ContextMessage[]; next?: string | undefined; body: Record<string, unknown>; status?: string }
+
+/** The agent that receives an image as a model-visible attachment; only `ctx.get('attachments')` is used. */
+export interface ImageReadingAgent {
+  ctx: { get(name: 'attachments'): { imageLimits: { maxImageBytes: number; maxMessageImageBytes: number }
+    saveImage(input: { data: Uint8Array; mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; name?: string }): Promise<unknown> } | undefined }
+}
+
+/** Bounded thread context reader used by assessments to inspect messages and images around a Trigger (`dsh-superagent` `ThreadContext`). */
+export interface ThreadContext<C> {
+  messageId(trigger: Trigger): string
+  read(commands: unknown, trigger: Trigger, part: ContextPartName, cursor: string | undefined, config: C): Promise<ContextPart>
+  /** Image keys of this message that `image` can read. */
+  images?(text: string): string[]
+  /** Reads one image of a message in the Trigger's Thread as an attachment for `agent`. */
+  image?(agent: ImageReadingAgent, commands: unknown, trigger: Trigger, message: { id: string; text: string }, key: string,
+    stateDir: string, signal: AbortSignal): Promise<unknown>
+}
+
 /** One Source plugin: configuration, UI fields, Policy part, reply channel, and the poll loop in `apply`. */
 export interface SourceKind<C extends Record<string, unknown> = Record<string, unknown>> {
   readonly kind: string
@@ -100,6 +128,8 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
     link: (address: Record<string, string>, links: Record<string, unknown>) => ChannelLink
   }
   readonly repliesTo?: (trigger: Trigger) => string | undefined
+  /** Thread context and image reading, for assessments that inspect the messages around a Trigger. */
+  readonly threadContext?: ThreadContext<never>
   readonly policy?: {
     readonly schema: unknown
     readonly fields: readonly unknown[]

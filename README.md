@@ -21,7 +21,12 @@ doing what it already does; this plugin only adds Telegram as another Source bes
 - **Environment** — a ticket that started on Telegram gets `DSH_SUPERAGENT_TELEGRAM_CHAT` and `DSH_SUPERAGENT_TELEGRAM_THREAD`.
 - **Health** — the `telegram` health entry shows `ready`, `paused` or `error` with a token-free detail.
 
-Messages are text-only by design: media arrives as a placeholder (`[photo]`, `[document: name.zip]`), never downloaded.
+- **Media** — photos, documents, videos, audio, voice notes, animations, video notes and stickers. The message text keeps a
+  placeholder naming the Telegram file id (`[photo AgAC…]`, `[document: report.pdf BQ…]`), and the files themselves are
+  downloaded (Bot API limit: 20 MB per file) into `<stateDir>/telegram-media/<token-hash>/` with the paths published as a
+  `telegram-files` fact on the Thread, so a worker can open them.
+- **Image reading** — during assessment the model can read an image of the message it is judging; it is committed through
+  `ctx.attachments` and shown to the model, never executed or exposed.
 
 ## Requirements
 
@@ -105,9 +110,12 @@ src/
   telegram-loops.ts    long-poll loop, offset handling, health
   telegram-trigger.ts  Bot API payloads → Trigger, mention detection, placeholders
   telegram-channel.ts  outbound replies: HTML, 4096-splitting, deep links
+  telegram-media.ts    what a message carries: photo sizes, documents, video/audio/voice, placeholders, image keys
+  telegram-download.ts bounded `getFile` downloads with caching and a token-scoped directory
+  telegram-context.ts  thread context around a Trigger and images as model-visible attachments
   contract.ts          the host contract subset this plugin is written against
   host.ts / ids.ts / kv.ts  host helpers reproduced, and the plugin's KV keys
-tests/                 28 unit tests (vitest)
+tests/                 52 unit tests (vitest)
 ```
 
 ## Development

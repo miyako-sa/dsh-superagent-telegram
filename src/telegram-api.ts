@@ -24,7 +24,7 @@ export const retryableTelegram = (error: unknown): boolean => error instanceof T
 /** True for failures retrying cannot fix, such as a rejected token or an unknown chat. */
 export const permanentTelegram = (error: unknown): boolean => !retryableTelegram(error)
 
-export interface TelegramUpdatesInput { offset?: number; timeout?: number; allowed_updates?: string[] }
+export interface TelegramUpdatesInput { offset?: number; timeout?: number; limit?: number; allowed_updates?: string[] }
 export interface SendMessageInput {
   chat_id: string | number
   text: string
@@ -35,6 +35,8 @@ export interface SendMessageInput {
   disable_notification?: boolean
 }
 export interface TelegramChatMember { status: string; user: TelegramUser; is_anonymous?: boolean }
+/** A Bot API `File`: `file_path` is relative to `https://api.telegram.org/file/bot<token>/` and valid for about an hour. */
+export interface TelegramFile { file_id: string; file_unique_id?: string; file_size?: number; file_path?: string }
 export interface TelegramWebhookInfo {
   url: string
   has_custom_certificate?: boolean
@@ -75,6 +77,22 @@ export class TelegramApi {
     }
     return body.result as T
   }
+  getFile(fileId: string, signal?: AbortSignal): Promise<TelegramFile> {
+    return this.call<TelegramFile>('getFile', { file_id: fileId }, signal)
+  }
+  /** Streams a file the Bot API hosts; the bytes go through the same token and are never logged. */
+  async download(filePath: string, signal?: AbortSignal): Promise<Response> {
+    let response: Response
+    try {
+      response = await fetch(`https://api.telegram.org/file/bot${this.token}/${filePath}`, { ...(signal ? { signal } : {}) })
+    } catch (error) {
+      if (signal?.aborted) throw error
+      throw new TelegramError(0, `Telegram file download network error: ${error instanceof Error ? error.message : String(error)}`,
+        undefined, { cause: error })
+    }
+    if (!response.ok) throw new TelegramError(response.status, `Telegram file download failed with HTTP ${response.status}`)
+    return response
+  }
   getMe(signal?: AbortSignal): Promise<TelegramUser> {
     return this.call<TelegramUser>('getMe', {}, signal)
   }
@@ -82,6 +100,7 @@ export class TelegramApi {
     return this.call<TelegramUpdate[]>('getUpdates', {
       ...(input.offset !== undefined ? { offset: input.offset } : {}),
       ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
       ...(input.allowed_updates ? { allowed_updates: input.allowed_updates } : {}),
     }, signal)
   }

@@ -2,6 +2,8 @@
 import { z } from 'zod'
 import type { Trigger } from './contract.ts'
 import { key } from './ids.ts'
+import { imageKeys, mediaOf, placeholderOf, servicePlaceholder, textOfMessage } from './telegram-media.ts'
+import type { TelegramMediaFile, TelegramPhotoSize } from './telegram-media.ts'
 
 export const SOURCE = 'telegram'
 
@@ -33,7 +35,7 @@ export interface TelegramMessageEntity {
   language?: string
   custom_emoji_id?: string
 }
-/** A message as the Bot API reports it; media fields are kept opaque because the Source is text-only. */
+/** A message as the Bot API reports it; media fields are read by `telegram-media.ts`. */
 export interface TelegramMessage {
   message_id: number
   message_thread_id?: number
@@ -49,14 +51,14 @@ export interface TelegramMessage {
   reply_to_message?: TelegramMessage
   is_topic_message?: boolean
   is_automatic_forward?: boolean
-  photo?: unknown[]
-  document?: { file_name?: string; mime_type?: string }
-  voice?: unknown
-  sticker?: unknown
-  video?: unknown
-  audio?: unknown
-  animation?: unknown
-  video_note?: unknown
+  photo?: TelegramPhotoSize[]
+  document?: TelegramMediaFile
+  voice?: TelegramMediaFile
+  sticker?: TelegramMediaFile
+  video?: TelegramMediaFile
+  audio?: TelegramMediaFile
+  animation?: TelegramMediaFile
+  video_note?: TelegramMediaFile
   location?: unknown
   contact?: unknown
   poll?: unknown
@@ -109,11 +111,21 @@ export const MessageSchema: z.ZodType<TelegramMessage> = z.lazy(() => z.object({
   text: z.string().optional(), caption: z.string().optional(),
   entities: z.array(MessageEntitySchema).optional(), caption_entities: z.array(MessageEntitySchema).optional(),
   reply_to_message: MessageSchema.optional(), is_topic_message: z.boolean().optional(), is_automatic_forward: z.boolean().optional(),
-  photo: z.array(z.unknown()).optional(), document: z.looseObject({ file_name: z.string().optional(), mime_type: z.string().optional() }).optional(),
-  voice: z.unknown().optional(), sticker: z.unknown().optional(), video: z.unknown().optional(), audio: z.unknown().optional(),
-  animation: z.unknown().optional(), video_note: z.unknown().optional(), location: z.unknown().optional(), contact: z.unknown().optional(),
+  photo: z.array(PhotoSizeSchema).optional(), document: FileSchema.optional(), voice: FileSchema.optional(),
+  sticker: FileSchema.optional(), video: FileSchema.optional(), audio: FileSchema.optional(),
+  animation: FileSchema.optional(), video_note: FileSchema.optional(), location: z.unknown().optional(), contact: z.unknown().optional(),
   poll: z.unknown().optional(), dice: z.unknown().optional(), venue: z.unknown().optional(), story: z.unknown().optional(),
 }).passthrough())
+const PhotoSizeSchema = z.object({
+  file_id: z.string(), file_unique_id: z.string().optional(), width: z.number().int().nonnegative(),
+  height: z.number().int().nonnegative(), file_size: z.number().int().nonnegative().optional(),
+}).passthrough()
+/** A `document`, `voice`, `sticker`, `video`, `audio`, `animation` or `video_note`; only `file_id` is required. */
+const FileSchema = z.object({
+  file_id: z.string(), file_unique_id: z.string().optional(), file_size: z.number().int().nonnegative().optional(),
+  file_name: z.string().optional(), mime_type: z.string().optional(), duration: z.number().optional(),
+  width: z.number().optional(), height: z.number().optional(), emoji: z.string().optional(), is_animated: z.boolean().optional(),
+}).passthrough()
 const ChatMemberUpdatedSchema: z.ZodType<TelegramChatMemberUpdated> = z.object({
   chat: ChatSchema, from: UserSchema, date: z.number().int(),
   old_chat_member: z.unknown().optional(), new_chat_member: z.unknown().optional(),
@@ -154,32 +166,19 @@ export function mentionBot(message: TelegramMessage, me: TelegramUser): boolean 
   })
 }
 
-/** A short stand-in for a non-text message, so its Trigger still carries something an assessment can read. */
+/** Placeholders for everything a message carried besides text, each naming its Telegram `file_id`. */
 export function placeholderFor(message: TelegramMessage): string {
-  if (message.photo?.length) return '[photo]'
-  if (message.document) return `[document${message.document.file_name ? `: ${message.document.file_name}` : ''}]`
-  if (message.voice) return '[voice]'
-  if (message.sticker) return '[sticker]'
-  if (message.video) return '[video]'
-  if (message.audio) return '[audio]'
-  if (message.animation) return '[animation]'
-  if (message.video_note) return '[video note]'
-  if (message.location) return '[location]'
-  if (message.contact) return '[contact]'
-  if (message.poll) return '[poll]'
-  if (message.dice) return '[dice]'
-  if (message.venue) return '[venue]'
-  if (message.story) return '[story]'
-  return '[message]'
+  const media = mediaOf(message)
+  return media.length ? media.map(placeholderOf).join(' ') : servicePlaceholder(message) ?? '[message]'
 }
-/** The message text, caption, or a placeholder for a message that carries neither. */
-export const messageText = (message: TelegramMessage): string => message.text || message.caption || placeholderFor(message)
+/** The message text or caption followed by media placeholders, so an assessment can read what it carried. */
+export const messageText = (message: TelegramMessage): string => textOfMessage(message)
 /**
  * Converts one Bot API message into a Trigger, returning undefined for the bot's own messages.
  * A reply inherits its parent's Thread through `parentThread`; a forum topic and a direct chat have Thread IDs of their own.
  */
 export function telegramTrigger(message: TelegramMessage, me: TelegramUser, config: TelegramTriggerConfig,
-  parentThread?: TelegramParentThread): Trigger | undefined {
+  parentThread?: TelegramParentThread, updateId?: number): Trigger | undefined {
   const from = message.from
   if (from?.id === me.id) return undefined
   const chatId = String(message.chat.id)
@@ -205,10 +204,16 @@ export function telegramTrigger(message: TelegramMessage, me: TelegramUser, conf
     at, text: messageText(message),
     channel: { source: SOURCE, thread: `telegram:${chatId}`, address },
     meta: { chatId, chatType: message.chat.type, messageId, direct, mentioned, threadId: thread,
+      // The update that carried this message: the floor a later context read may page from.
+      ...(updateId !== undefined ? { updateId } : {}),
       ...(message.message_thread_id !== undefined ? { messageThreadId: String(message.message_thread_id) } : {}),
       ...(reply ? { replyToId: String(reply.message_id) } : {}),
       ...(edited ? { editedAt: at } : {}),
       ...(message.chat.title ? { chatTitle: message.chat.title } : {}),
-      ...(from?.username ? { username: from.username } : {}) },
+      ...(from?.username ? { username: from.username } : {}),
+      // The media file ids the Trigger text names, so a downloader and the image reader agree on what this message carried.
+      ...(() => { const media = mediaOf(message); return media.length ? { media: media.map(item => ({ kind: item.kind, fileId: item.fileId })) } : {} })(),
+      ...(() => { const keys = imageKeys(messageText(message)); return keys.length ? { imageKeys: keys } : {} })(),
+    },
   }
 }

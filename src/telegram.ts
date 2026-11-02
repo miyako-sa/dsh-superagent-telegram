@@ -6,11 +6,16 @@ import { rememberTokenEnv, sendTelegram, telegramChannelLink } from './telegram-
 import { runTelegram } from './telegram-loops.ts'
 import { SOURCE, telegramTriggerId, type TelegramUser } from './telegram-trigger.ts'
 import { sourceContext } from './host.ts'
+import { rememberContextConfig, telegramThreadContext } from './telegram-context.ts'
 import type { SourceContext, SourceHost, SourceKind } from './contract.ts'
 
 /** Reads the Telegram instance's stored configuration; `host.sources.instance` is the host's own lookup. */
-export const telegramSettings = (host: SourceHost): TelegramConfig =>
-  host.sources.instance<TelegramConfig>(SOURCE)?.config ?? TelegramConfigSchema.parse({})
+export const telegramSettings = (host: SourceHost): TelegramConfig => {
+  const config = host.sources.instance<TelegramConfig>(SOURCE)?.config ?? TelegramConfigSchema.parse({})
+  // Image reads receive no configuration of their own, so the installed settings are recorded here.
+  rememberContextConfig(config)
+  return config
+}
 
 export { SOURCE, mentionBot, messageText, placeholderFor, telegramTrigger, telegramTriggerId } from './telegram-trigger.ts'
 export type { TelegramMessage, TelegramUser } from './telegram-trigger.ts'
@@ -31,6 +36,8 @@ export const TelegramConfigSchema = z.object({
   channelPosts: z.boolean().default(false),
   pollTimeoutSeconds: z.number().int().min(0).max(50).default(25),
   failuresBeforeError: z.number().int().min(1).max(20).default(3),
+  maxDownloadBytes: z.number().int().min(0).default(20 * 1024 * 1024),
+  maxDownloadFiles: z.number().int().min(0).max(10).default(3),
 }).strict()
 export type TelegramConfig = z.infer<typeof TelegramConfigSchema>
 const displayName = (user: TelegramUser): string =>
@@ -62,8 +69,14 @@ export const telegramKind: SourceKind<TelegramConfig> = {
       hint: { zh: 'getUpdates 每次最多等待的时间；0 表示立即返回。', en: 'How long each getUpdates call may wait; 0 returns immediately.' } },
     { key: 'failuresBeforeError', type: 'number', advanced: true, min: 1, max: 20, label: { zh: '连续失败几次后报告异常', en: 'Failed polls before reporting an error' },
       hint: { zh: '单次网络中断会在下一次轮询时自动重试，不必报告。', en: 'A single network interruption is retried on the next poll and need not be reported.' } },
+    { key: 'maxDownloadBytes', type: 'number', advanced: true, min: 0, max: 20 * 1024 * 1024, label: { zh: '单个文件下载上限 / 字节', en: 'Download limit per file / bytes' },
+      hint: { zh: '机器人接口本身最多允许 20 MB；设为 0 关闭媒体下载，消息里只保留文件名占位。', en: 'The Bot API itself allows at most 20 MB; 0 turns media downloads off and leaves only the file-name placeholder in the message.' } },
+    { key: 'maxDownloadFiles', type: 'number', advanced: true, min: 0, max: 10, label: { zh: '每条消息最多下载几个文件', en: 'Downloads per message' },
+      hint: { zh: '一条消息带多个文件时，只下载前几个，其余只留占位。', en: 'When a message carries several files, only the first ones are downloaded and the rest stay as placeholders.' } },
   ],
   health: ['telegram'],
+  // Reads the chat around a Trigger and turns one image of it into an attachment during assessment.
+  threadContext: telegramThreadContext as unknown as SourceKind<TelegramConfig>['threadContext'],
   scope({ meta }, config) {
     if (meta.direct === true) {
       return config.directMessages ? { listened: true, observed: false, row: 'direct' }

@@ -36,9 +36,12 @@ describe('mentionBot', () => {
 
 describe('message text', () => {
   it('falls back to a placeholder for media that carries no text', () => {
-    expect(placeholderFor({ message_id: 1, date: 1, chat: privateMessage().chat as never, document: { file_name: 'a.zip' } } as TelegramMessage))
-      .toBe('[document: a.zip]')
-    expect(messageText({ message_id: 1, date: 1, chat: privateMessage().chat as never, photo: [{}, {}] } as TelegramMessage)).toBe('[photo]')
+    // A placeholder always names the Telegram file id, so an assessment can read that exact media back.
+    expect(placeholderFor({ message_id: 1, date: 1, chat: privateMessage().chat as never, document: { file_id: 'BQzip', file_name: 'a.zip' } } as TelegramMessage))
+      .toBe('[document: a.zip BQzip]')
+    // The largest photo size is the one worth downloading.
+    expect(messageText({ message_id: 1, date: 1, chat: privateMessage().chat as never,
+      photo: [{ file_id: 'AgAC1', width: 90, height: 60 }, { file_id: 'AgAC2', width: 320, height: 240 }] } as TelegramMessage)).toBe('[photo AgAC2]')
   })
   it('prefers text, then caption', () => {
     expect(messageText(privateMessage({ text: 'x', caption: 'y' }) as TelegramMessage)).toBe('x')
