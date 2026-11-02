@@ -44,13 +44,12 @@ cd <dsh-superagent checkout>
 pnpm add file:../dsh-superagent-telegram
 ```
 
-Then add the bundle's patch layer to the host's profile (the profile file `dsh-superagent` loads, usually
-`$DSH_HOME/profiles/<profile>/*.yml`):
+Add the bundle after the host's own bundle, so its `insert` row lands on top of the host's tree (the profile file `dsh-superagent`
+loads, usually `$DSH_HOME/profiles/<profile>/package.json`). A host older than this plugin still ships its own Telegram Source:
+remove that entry and `src/sources/telegram*.ts` first, or two registrations of the `telegram` kind collide.
 
-```yaml
-- insert:
-    - id: dsh-superagent-telegram
-      name: dsh-superagent-telegram
+```json
+"dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-superagent", "dsh-superagent-telegram"] } }
 ```
 
 ```bash
