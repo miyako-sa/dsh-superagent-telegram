@@ -1,4 +1,6 @@
 /** Telegram outbound channel: HTML-safe replies, 4096-character splitting, and chat deep links. */
+import { readFile, stat } from 'node:fs/promises'
+import { basename, extname } from 'node:path'
 import type { ChannelLink, OutboundMessage, SourceContext } from './contract.ts'
 import { DEFAULT_TOKEN_ENV, TelegramApi, TelegramError, telegramToken } from './telegram-api.ts'
 import { telegramTriggerId } from './telegram-trigger.ts'
@@ -41,6 +43,15 @@ export function telegramHtml(text: string): string {
   html = html.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_, label: string, url: string) => `<a href="${url.replaceAll('"', '&quot;')}">${label}</a>`)
   return html.replace(/\u0000(\d+)\u0000/g, (_, index: string) => blocks[Number(index)] ?? '')
 }
+/** The Bot API refuses an upload above this size; larger files are left out of the reply and the caller is told. */
+export const TELEGRAM_SEND_FILE_LIMIT = 50 * 1024 * 1024
+/** How many files one reply may carry; Telegram allows ten in a media group, and a reply sends them one by one. */
+export const TELEGRAM_SEND_FILES = 10
+const MEDIA_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.gif': 'image/gif', '.pdf': 'application/pdf', '.zip': 'application/zip', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg',
+  '.txt': 'text/plain', '.json': 'application/json', '.md': 'text/markdown', '.csv': 'text/csv', '.ogg': 'audio/ogg' }
+/** The media type a file name suggests; documents are sent verbatim, so an unknown one is octet-stream. */
+export const mediaTypeFor = (path: string): string => MEDIA_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream'
 const GONE = ['chat not found', 'bot was kicked', 'bot is blocked', 'user is deactivated', 'message thread not found', 'topic_closed', 'chat_write_forbidden']
 /** True when Telegram permanently refuses delivery to this conversation or topic. */
 export function goneTelegram(error: unknown): boolean {
@@ -78,6 +89,20 @@ export async function sendTelegram(_host: Pick<SourceContext, 'commands'>, messa
         link_preview_options: { is_disabled: true },
         ...(thread !== undefined && Number.isFinite(thread) ? { message_thread_id: thread } : {}),
         ...(reply ? { reply_parameters: reply } : {}),
+      })
+    }
+    // Files follow the text as documents, so any type arrives intact; a file above the Bot API's upload limit is skipped
+    // rather than failing a reply whose text already went out.
+    for (const file of message.attachments?.slice(0, TELEGRAM_SEND_FILES) ?? []) {
+      // A file that vanished or grew past the limit is skipped: the text already went out, and one file must not fail the reply.
+      const info = await stat(file.path).catch(() => undefined)
+      if (!info || !info.isFile() || info.size > TELEGRAM_SEND_FILE_LIMIT) continue
+      await api.sendDocument({
+        chat_id: chatId,
+        data: await readFile(file.path),
+        filename: basename(file.name ?? file.path),
+        mediaType: mediaTypeFor(file.path),
+        ...(thread !== undefined && Number.isFinite(thread) ? { message_thread_id: thread } : {}),
       })
     }
   } catch (error) {

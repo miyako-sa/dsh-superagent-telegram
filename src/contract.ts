@@ -21,6 +21,8 @@ export type Family<V, A extends unknown[]> = ((...name: A) => Key<V>) & { readon
 export interface OutboundMessage {
   readonly id: string
   readonly text: string
+  /** Files the message carries after its text, as absolute host paths. */
+  readonly attachments?: readonly { path: string; name?: string }[]
   readonly channel: { source: string; thread: string; address: Record<string, string> }
   readonly [key: string]: unknown
 }

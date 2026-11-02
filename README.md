@@ -27,6 +27,9 @@ doing what it already does; this plugin only adds Telegram as another Source bes
   `telegram-files` fact on the Thread, so a worker can open them.
 - **Image reading** — during assessment the model can read an image of the message it is judging; it is committed through
   `ctx.attachments` and shown to the model, never executed or exposed.
+- **Sending files** — a reply that carries `attachments` (host `OutboundMessage.attachments`, set by the worker's
+  `orchestrator_send_file` tool) sends its text, then each file as a document, up to 10 files and the Bot API's 50 MB upload
+  limit per file. A file that vanished or is too large is skipped rather than failing the reply whose text already went out.
 
 ## Requirements
 
@@ -115,7 +118,7 @@ src/
   telegram-context.ts  thread context around a Trigger and images as model-visible attachments
   contract.ts          the host contract subset this plugin is written against
   host.ts / ids.ts / kv.ts  host helpers reproduced, and the plugin's KV keys
-tests/                 52 unit tests (vitest)
+tests/                 57 unit tests (vitest)
 ```
 
 ## Development

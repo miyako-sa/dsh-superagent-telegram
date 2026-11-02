@@ -34,6 +34,16 @@ export interface SendMessageInput {
   message_thread_id?: number
   disable_notification?: boolean
 }
+export interface SendDocumentInput {
+  chat_id: string | number
+  data: Uint8Array
+  filename: string
+  mediaType?: string
+  caption?: string
+  parse_mode?: 'HTML'
+  reply_parameters?: { message_id: number; allow_sending_without_reply?: boolean }
+  message_thread_id?: number
+}
 export interface TelegramChatMember { status: string; user: TelegramUser; is_anonymous?: boolean }
 /** A Bot API `File`: `file_path` is relative to `https://api.telegram.org/file/bot<token>/` and valid for about an hour. */
 export interface TelegramFile { file_id: string; file_unique_id?: string; file_size?: number; file_path?: string }
@@ -76,6 +86,30 @@ export class TelegramApi {
         body.description ?? `Telegram ${method} failed with HTTP ${response.status}`, parameters?.retry_after)
     }
     return body.result as T
+  }
+  /** Sends one file from `file` as a document with `caption`; the field name is `document`. */
+  async sendDocument(input: SendDocumentInput, signal?: AbortSignal): Promise<unknown> {
+    const form = new FormData()
+    form.append('chat_id', String(input.chat_id))
+    if (input.caption) form.append('caption', input.caption)
+    if (input.parse_mode) form.append('parse_mode', input.parse_mode)
+    if (input.message_thread_id !== undefined && Number.isFinite(input.message_thread_id)) form.append('message_thread_id', String(input.message_thread_id))
+    if (input.reply_parameters) form.append('reply_parameters', JSON.stringify(input.reply_parameters))
+    form.append('document', new Blob([input.data], { type: input.mediaType ?? 'application/octet-stream' }), input.filename)
+    let response: Response
+    try {
+      response = await fetch(this.url('sendDocument'), { method: 'POST', body: form, ...(signal ? { signal } : {}) })
+    } catch (error) {
+      if (signal?.aborted) throw error
+      throw new TelegramError(0, `Telegram sendDocument network error: ${error instanceof Error ? error.message : String(error)}`,
+        undefined, { cause: error })
+    }
+    let body: ApiResponse<unknown>
+    try { body = await response.json() as ApiResponse<unknown> }
+    catch { throw new TelegramError(response.status, `Telegram sendDocument returned HTTP ${response.status} without JSON`) }
+    if (!body.ok) throw new TelegramError(body.error_code ?? response.status,
+      body.description ?? `Telegram sendDocument failed with HTTP ${response.status}`, body.parameters?.retry_after)
+    return body.result
   }
   getFile(fileId: string, signal?: AbortSignal): Promise<TelegramFile> {
     return this.call<TelegramFile>('getFile', { file_id: fileId }, signal)
